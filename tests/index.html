@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coin Dash tests</title>
+<style>
+body { margin: 0; background: #0a1120; color: #e5edf7; font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 850px; margin: 20px auto; padding: 0 16px; }
+.pass { color: #7ee787; } .fail { color: #ff7b72; } pre { white-space: pre-wrap; }
+</style>
+<script>
+  // Headless browsers may not fire animation frames; ?headless drives the game loop with timers instead.
+  if (new URLSearchParams(location.search).has('headless')) {
+    window.requestAnimationFrame = cb => setTimeout(() => cb(performance.now()), 16);
+    window.cancelAnimationFrame = id => clearTimeout(id);
+  }
+</script>
+</head>
+<body>
+<main>
+  <h1>Coin Dash tests</h1>
+  <p>Runs the real game with short timings. Your saved high score is restored afterwards.</p>
+  <pre id="results">Running…</pre>
+  <div id="game"></div>
+</main>
+<script src="../vendor/phaser-3.90.0.min.js"></script>
+<script src="../settings.js"></script>
+<script>
+  // Short, deterministic settings: no drones unless a test adds one, and a round that never times out.
+  Object.assign(COIN_DASH, { roundSeconds: 600, droneCount: 0 });
+  Object.assign(COIN_DASH.powerUps, {
+    spawnEverySeconds: 1, lifetimeSeconds: 2, speedSeconds: 1.5, doubleSeconds: 1.5, graceSeconds: 0.5
+  });
+</script>
+<script src="../game.js"></script>
+<script src="powerups.test.js"></script>
+</body>
+</html>

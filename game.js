@@ -23,6 +23,15 @@ function saveHighScore(score) {
   }
 }
 
+// Power-up types: on-field symbol, HUD label, and which entry of COIN_DASH.colors they use.
+const POWER_UPS = {
+  shield: { symbol: 'S', label: 'SHIELD' },
+  speed: { symbol: '>>', label: 'SPEED' },
+  double: { symbol: 'x2', label: 'x2 COINS' }
+};
+const POWER_UP_TYPES = Object.keys(POWER_UPS);
+const toCss = color => '#' + color.toString(16).padStart(6, '0');
+
 class CoinDash extends Phaser.Scene {
   constructor() { super('CoinDash'); }
 
@@ -54,7 +63,9 @@ class CoinDash extends Phaser.Scene {
     }
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
-      this.score++;
+      const points = this.effects.double > 0 ? 2 : 1;
+      this.score += points;
+      if (points > 1) this.popText(this.coin.x, this.coin.y - 14, `+${points}`, c.colors.double);
       if (this.score > this.highScore) {
         this.highScore = this.score;
         this.newRecord = true;
@@ -62,14 +73,167 @@ class CoinDash extends Phaser.Scene {
       }
       this.placeCoin();
     });
-    this.physics.add.overlap(this.player, this.drones, () => this.finish('A drone caught you!'));
+    this.physics.add.overlap(this.player, this.drones, () => this.hitDrone());
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R');
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
     this.paused = false;
     this.pauseText = this.add.text(c.width / 2, c.height / 2, 'PAUSED',
-      { font: '48px monospace', color: '#ffffff' }).setOrigin(0.5).setDepth(1).setVisible(false);
+      { font: '48px monospace', color: '#ffffff' }).setOrigin(0.5).setDepth(3).setVisible(false);
     this.input.keyboard.on('keydown-P', () => this.togglePause());
+    this.createPowerUps();
+  }
+
+  // Power-up timers run on playMs, which only advances in update() while the round is live,
+  // so pausing or ending the round freezes every duration without extra bookkeeping.
+  createPowerUps() {
+    const c = COIN_DASH;
+    this.playMs = 0;
+    this.effects = { shield: false, speed: 0, double: 0 }; // speed and double: ms remaining
+    this.graceMs = 0;
+    this.pickup = null;
+    this.nextSpawnAt = c.powerUps.spawnEverySeconds * 1000;
+    this.shieldRing = this.add.circle(this.player.x, this.player.y, 22)
+      .setStrokeStyle(3, c.colors.shield).setVisible(false);
+    this.powerHud = {};
+    for (const type of POWER_UP_TYPES) {
+      this.powerHud[type] = this.add.text(0, 13, '', { font: 'bold 16px monospace', color: toCss(c.colors[type]) })
+        .setOrigin(1, 0).setVisible(false);
+    }
+  }
+
+  spawnPowerUp(type = Phaser.Utils.Array.GetRandom(POWER_UP_TYPES), at = this.findSpawnPoint()) {
+    const c = COIN_DASH;
+    if (!at) {
+      this.nextSpawnAt = this.playMs + 500; // arena too crowded right now; try again shortly
+      return null;
+    }
+    const color = c.colors[type];
+    let shape;
+    if (type === 'shield') shape = this.add.circle(at.x, at.y, 13, color).setStrokeStyle(3, 0xffffff);
+    else if (type === 'speed') shape = this.add.triangle(at.x, at.y, 0, 26, 13, 0, 26, 26, color);
+    else shape = this.add.star(at.x, at.y, 5, 8, 16, color);
+    const label = this.add.text(at.x, at.y + (type === 'speed' ? 4 : 0), POWER_UPS[type].symbol,
+      { font: 'bold 12px monospace', color: '#0a1120' }).setOrigin(0.5);
+    this.physics.add.existing(shape);
+    shape.body.setImmovable(true);
+    const collider = this.physics.add.overlap(this.player, shape, () => this.collectPowerUp());
+    this.tweens.add({ targets: [shape, label], scale: { from: 0, to: 1 }, duration: 250, ease: 'Back.Out' });
+    this.pickup = { type, shape, label, collider, expiresAt: this.playMs + c.powerUps.lifetimeSeconds * 1000 };
+    return this.pickup;
+  }
+
+  // A free spot inside the arena, clear of the player, the coin and every drone.
+  findSpawnPoint() {
+    const c = COIN_DASH;
+    const clear = (x, y, obj, gap) => Phaser.Math.Distance.Between(x, y, obj.x, obj.y) >= gap;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const x = Phaser.Math.Between(30, c.width - 30);
+      const y = Phaser.Math.Between(80, c.height - 30);
+      if (clear(x, y, this.player, 90) && clear(x, y, this.coin, 40)
+        && this.drones.getChildren().every(d => clear(x, y, d, 90))) return { x, y };
+    }
+    return null;
+  }
+
+  removePowerUp() {
+    const { shape, label, collider } = this.pickup;
+    collider.destroy();
+    shape.destroy();
+    label.destroy();
+    this.pickup = null;
+    this.nextSpawnAt = this.playMs + COIN_DASH.powerUps.spawnEverySeconds * 1000;
+  }
+
+  collectPowerUp() {
+    if (this.finished || !this.pickup) return;
+    const { type, shape } = this.pickup;
+    const color = COIN_DASH.colors[type];
+    this.burst(shape.x, shape.y, color);
+    this.popText(shape.x, shape.y - 20, `${POWER_UPS[type].label}!`, color);
+    this.removePowerUp();
+    this.activatePowerUp(type);
+  }
+
+  // Taking a power-up that is already active refreshes it rather than stacking.
+  activatePowerUp(type) {
+    const p = COIN_DASH.powerUps;
+    if (type === 'shield') this.effects.shield = true;
+    else if (type === 'speed') this.effects.speed = p.speedSeconds * 1000;
+    else this.effects.double = p.doubleSeconds * 1000;
+    this.updatePowerVisuals();
+    this.tweens.add({ targets: this.powerHud[type], scale: { from: 1.5, to: 1 }, duration: 300 });
+  }
+
+  hitDrone() {
+    if (this.finished || this.graceMs > 0) return;
+    if (!this.effects.shield) {
+      this.finish('A drone caught you!');
+      return;
+    }
+    // The shield absorbs this hit; a short grace period lets the player get clear of the drone.
+    this.effects.shield = false;
+    this.graceMs = COIN_DASH.powerUps.graceSeconds * 1000;
+    this.burst(this.player.x, this.player.y, COIN_DASH.colors.shield, 3.5);
+    this.popText(this.player.x, this.player.y - 26, 'SHIELD BROKEN', COIN_DASH.colors.shield);
+    this.cameras.main.shake(150, 0.006);
+    this.updatePowerVisuals();
+  }
+
+  tickPowerUps(delta) {
+    for (const type of ['speed', 'double']) {
+      if (this.effects[type] <= 0) continue;
+      this.effects[type] = Math.max(0, this.effects[type] - delta);
+      if (this.effects[type] === 0) {
+        this.popText(this.player.x, this.player.y - 26, `${POWER_UPS[type].label} ended`, 0x9aa8bb);
+      }
+    }
+    this.graceMs = Math.max(0, this.graceMs - delta);
+    if (this.pickup) {
+      const left = this.pickup.expiresAt - this.playMs;
+      if (left <= 0) this.removePowerUp();
+      else {
+        // Blink during the last two seconds so the player knows it is about to fade.
+        const alpha = left < 2000 && Math.floor(left / 150) % 2 ? 0.3 : 1;
+        this.pickup.shape.setAlpha(alpha);
+        this.pickup.label.setAlpha(alpha);
+      }
+    } else if (this.playMs >= this.nextSpawnAt) {
+      this.spawnPowerUp();
+    }
+    this.updatePowerVisuals();
+  }
+
+  updatePowerVisuals() {
+    const c = COIN_DASH;
+    this.shieldRing.setVisible(this.effects.shield).setPosition(this.player.x, this.player.y);
+    this.player.setAlpha(this.graceMs > 0 && Math.floor(this.graceMs / 100) % 2 ? 0.35 : 1);
+    if (this.effects.speed > 0) this.player.setStrokeStyle(3, c.colors.speed);
+    else this.player.setStrokeStyle();
+    if (this.effects.double > 0) this.coin.setStrokeStyle(3, c.colors.double);
+    else this.coin.setStrokeStyle();
+    // HUD badges, right-aligned at the top; the shield lasts until hit so it shows no timer.
+    let right = c.width - 18;
+    for (const type of POWER_UP_TYPES) {
+      const badge = this.powerHud[type];
+      const ms = this.effects[type];
+      badge.setVisible(Boolean(ms));
+      if (!ms) continue;
+      badge.setText(type === 'shield' ? POWER_UPS[type].label : `${POWER_UPS[type].label} ${Math.ceil(ms / 1000)}s`);
+      badge.setX(right).setAlpha(type !== 'shield' && ms < 2000 && Math.floor(ms / 200) % 2 ? 0.4 : 1);
+      right -= badge.width + 16;
+    }
+  }
+
+  popText(x, y, message, color) {
+    const text = this.add.text(x, y, message, { font: 'bold 16px monospace', color: toCss(color) })
+      .setOrigin(0.5).setDepth(2);
+    this.tweens.add({ targets: text, y: y - 30, alpha: 0, duration: 900, onComplete: () => text.destroy() });
+  }
+
+  burst(x, y, color, size = 2.5) {
+    const ring = this.add.circle(x, y, 14).setStrokeStyle(3, color).setDepth(2);
+    this.tweens.add({ targets: ring, scale: size, alpha: 0, duration: 350, onComplete: () => ring.destroy() });
   }
 
   togglePause() {
@@ -78,10 +242,12 @@ class CoinDash extends Phaser.Scene {
     if (this.paused) {
       this.pausedAt = this.time.now;
       this.physics.pause();
+      this.tweens.pauseAll();
     } else {
       // Push the deadline back so time spent paused does not count against the round.
       this.deadline += this.time.now - this.pausedAt;
       this.physics.resume();
+      this.tweens.resumeAll();
     }
     this.pauseText.setVisible(this.paused);
   }
@@ -98,16 +264,22 @@ class CoinDash extends Phaser.Scene {
     this.coin.body.reset(x, y);
   }
 
-  update() {
+  update(time, delta) {
     if (this.finished || this.paused) return;
+    // Cap the step so a long frame (e.g. a background tab) cannot skip a whole power-up.
+    const step = Math.min(delta, 100);
+    this.playMs += step;
+    this.tickPowerUps(step);
     const dx = Number(this.cursors.right.isDown || this.keys.D.isDown)
       - Number(this.cursors.left.isDown || this.keys.A.isDown);
     const dy = Number(this.cursors.down.isDown || this.keys.S.isDown)
       - Number(this.cursors.up.isDown || this.keys.W.isDown);
-    const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
+    const speed = COIN_DASH.playerSpeed * (this.effects.speed > 0 ? COIN_DASH.powerUps.speedMultiplier : 1);
+    const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(speed);
     this.player.body.setVelocity(direction.x, direction.y);
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}          Best: ${this.highScore}          Time: ${seconds}s`);
+    // Kept compact so the power-up badges fit on the right of the same row.
+    this.hud.setText(`Coins: ${this.score}    Best: ${this.highScore}    Time: ${seconds}s`);
     if (seconds === 0) this.finish('Time is up!');
   }
 
@@ -115,14 +287,15 @@ class CoinDash extends Phaser.Scene {
     if (this.finished) return;
     this.finished = true;
     this.physics.pause();
+    this.player.setAlpha(1); // in case the round ends mid-blink during the shield grace period
     const c = COIN_DASH;
-    this.add.rectangle(c.width / 2, c.height / 2, 460, 190, 0x0a1120, 0.95);
+    this.add.rectangle(c.width / 2, c.height / 2, 460, 190, 0x0a1120, 0.95).setDepth(4);
     this.add.text(c.width / 2, c.height / 2,
       `${reason}\n${this.score} coins collected\n`
         + (this.newRecord ? 'New high score!' : `High score: ${this.highScore}`)
         + '\nPress R to try again',
       { font: '24px monospace', color: '#ffffff', align: 'center', lineSpacing: 12 }
-    ).setOrigin(0.5);
+    ).setOrigin(0.5).setDepth(4);
   }
 }
 window.coinDashGame = new Phaser.Game({
