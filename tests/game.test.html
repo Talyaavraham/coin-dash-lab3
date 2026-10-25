@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Coin Dash game flow: running</title></head>
+<body>
+<h1>Game flow</h1>
+<p>Plays the real game below with simulated key presses. Serve the repository folder over HTTP
+(for example <code>python3 -m http.server</code>) and open <code>/tests/game.test.html</code>;
+the title ends in PASS or FAIL. Your saved high score is restored afterwards.</p>
+<pre id="results"></pre>
+<iframe id="frame" src="../index.html" width="900" height="760"></iframe>
+<script>
+const lines = [];
+let failed = 0;
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitFor(condition, what, timeout = 3000) {
+  for (const start = Date.now(); Date.now() - start < timeout; await wait(20)) if (condition()) return;
+  throw new Error(`timed out waiting for ${what}`);
+}
+function check(ok, what) { if (!ok) throw new Error(what); }
+function near(actual, expected, what, tolerance = 0.5) {
+  check(Math.abs(actual - expected) <= tolerance, `${what}: expected about ${expected}, got ${actual}`);
+}
+async function step(name, fn) {
+  try { await fn(); lines.push(`ok   ${name}`); } catch (err) { failed++; lines.push(`FAIL ${name}: ${err.message}`); }
+  document.getElementById('results').textContent = lines.join('\n');
+}
+
+const KEYS = { ENTER: 13, P: 80, R: 82, M: 77, ONE: 49, DOWN: 40 };
+let win, game;
+async function press(name) {
+  for (const type of ['keydown', 'keyup']) {
+    const event = new win.KeyboardEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'keyCode', { get: () => KEYS[name] });
+    win.dispatchEvent(event);
+    await wait(60);
+  }
+}
+const scene = () => game.scene.getScene('CoinDash');
+const menu = () => game.scene.getScene('DifficultySelect');
+const speeds = () => scene().drones.getChildren().map(d => d.body.velocity.length());
+const remaining = () => scene().deadline - scene().time.now;
+// Turn off drone hits for the current round so a stray drone cannot end it mid-test.
+function shield() {
+  for (const collider of scene().physics.world.colliders.getActive()) {
+    if (collider.object2 === scene().drones) collider.active = false;
+  }
+}
+
+async function run() {
+  const frame = document.getElementById('frame');
+  await new Promise(resolve => (frame.contentDocument?.readyState === 'complete' ? resolve() : frame.addEventListener('load', resolve)));
+  win = frame.contentWindow;
+  const KEY = 'coinDash.highScore', savedHighScore = win.localStorage.getItem(KEY);
+  win.localStorage.removeItem(KEY);
+  win.location.reload();
+  await new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
+  win = frame.contentWindow;
+  await waitFor(() => win.coinDashGame?.isBooted && win.coinDashGame.scene.isActive('DifficultySelect'), 'menu');
+  game = win.coinDashGame;
+
+  await step('game opens on the difficulty menu with Normal highlighted', async () => {
+    check(!game.scene.isActive('CoinDash'), 'round already running');
+    check(menu().choice === 1, `choice ${menu().choice}`);
+  });
+  await step('Down then Enter starts Hard', async () => {
+    await press('DOWN');
+    check(menu().choice === 2, `choice ${menu().choice}`);
+    await press('ENTER');
+    await waitFor(() => game.scene.isActive('CoinDash'), 'round');
+    shield();
+    const g = scene();
+    check(g.difficulty.label === 'Hard', g.difficulty.label);
+    check(g.drones.getLength() === 4, `${g.drones.getLength()} drones`);
+    check(g.level === 1, `level ${g.level}`);
+    await waitFor(() => g.hud.text.includes('Hard · Level 1'), 'HUD difficulty and level');
+    speeds().forEach(s => near(s, 125, 'start speed'));
+  });
+  await step('collecting a coin still sets and saves the high score', async () => {
+    const g = scene();
+    await waitFor(() => g.score === 1 || (g.coin.body.reset(g.player.x, g.player.y), false), 'coin pickup');
+    check(g.highScore === 1 && g.newRecord, `highScore ${g.highScore}`);
+    check(win.localStorage.getItem(KEY) === '1', `stored ${win.localStorage.getItem(KEY)}`);
+    await waitFor(() => g.hud.text.includes('Best: 1'), 'Best in HUD');
+  });
+  await step('ten seconds of play raises Hard to level 2 with faster drones and a banner', async () => {
+    const g = scene();
+    g.deadline -= 10000;
+    await waitFor(() => g.level === 2, 'level 2');
+    speeds().forEach(s => near(s, 125 * 1.14, 'level 2 speed'));
+    check(g.children.list.some(o => o.type === 'Text' && o.text === 'LEVEL 2'), 'no LEVEL 2 banner');
+    await waitFor(() => g.hud.text.includes('Level 2'), 'HUD level 2');
+  });
+  await step('pause freezes drones, timer, banner and progression', async () => {
+    const g = scene();
+    const before = remaining();
+    const probe = g.tweens.addCounter({ from: 0, to: 1, duration: 10000 }); // stands in for the level banner
+    await wait(100);
+    await press('P');
+    check(g.paused, 'not paused');
+    const positions = g.drones.getChildren().map(d => `${d.x},${d.y}`).join(' ');
+    const probeValue = probe.getValue();
+    g.score = 100; // would mean the top level if progression ran while paused
+    await wait(1500);
+    check(g.level === 2, `level moved to ${g.level} while paused`);
+    check(g.drones.getChildren().map(d => `${d.x},${d.y}`).join(' ') === positions, 'drones moved');
+    check(probe.getValue() === probeValue, 'animations kept running');
+    check(g.pauseText.visible, 'PAUSED not shown');
+    await press('P');
+    check(!g.paused, 'still paused');
+    near(remaining(), before, 'time left after resume', 400);
+  });
+  await step('after resume the level catches up, capped, with an extra drone far from the player', async () => {
+    const g = scene();
+    await waitFor(() => g.level === 6, 'level 6');
+    check(g.drones.getLength() === 5, `${g.drones.getLength()} drones`);
+    const newest = g.drones.getChildren()[4];
+    check(win.Phaser.Math.Distance.Between(newest.x, newest.y, g.player.x, g.player.y) > 250, 'new drone spawned near player');
+    speeds().forEach(s => { near(s, 125 * 1.7, 'level 6 speed', 1); check(s < 240, 'drone faster than player'); });
+  });
+  await step('R restarts on the same difficulty with progression reset', async () => {
+    const old = scene();
+    await press('R');
+    await waitFor(() => scene().level === 1 && scene().score === 0 && scene().drones.getLength() === 4, 'fresh round');
+    shield();
+    const g = scene();
+    check(g.difficulty.label === 'Hard', g.difficulty.label);
+    check(g.highScore === 1, `high score ${g.highScore} after restart`);
+    near(remaining(), 45000, 'fresh timer', 500);
+    speeds().forEach(s => near(s, 125, 'reset speed'));
+  });
+  await step('R while paused gives a running round', async () => {
+    await press('P');
+    check(scene().paused, 'not paused');
+    await press('R');
+    await waitFor(() => !scene().paused, 'unpaused round');
+    shield();
+    const g = scene(), x = g.drones.getChildren()[0].x;
+    await waitFor(() => g.drones.getChildren()[0].x !== x, 'drones moving');
+    const probe = g.tweens.addCounter({ from: 0, to: 1, duration: 1000 });
+    await waitFor(() => probe.getValue() > 0, 'animations running after restart');
+  });
+  await step('round end stops progression and offers R or M; P does nothing', async () => {
+    const g = scene();
+    g.deadline = g.time.now; // 45 s elapsed would mean level 5 on Hard, but the round ends first
+    await waitFor(() => g.finished, 'round end');
+    g.score = 100;
+    await wait(300);
+    check(g.level === 1, `level ${g.level} after the end`);
+    check(g.children.list.some(o => o.type === 'Text' && o.text.includes('M: change difficulty')), 'end hint');
+    await press('P');
+    check(!g.paused, 'paused after the end');
+  });
+  await step('M returns to the menu with Hard remembered; 1 starts Easy', async () => {
+    await press('M');
+    await waitFor(() => game.scene.isActive('DifficultySelect'), 'menu');
+    check(menu().choice === 2, `choice ${menu().choice}`);
+    await press('ONE');
+    await waitFor(() => game.scene.isActive('CoinDash') && scene().difficulty.label === 'Easy', 'Easy round');
+    shield();
+    check(scene().drones.getLength() === 2, `${scene().drones.getLength()} drones`);
+  });
+  await step('Easy tops out at level 4 with no extra drones', async () => {
+    const g = scene();
+    g.score = 1000;
+    await waitFor(() => g.level === 4, 'level 4');
+    await wait(100);
+    check(g.drones.getLength() === 2, `${g.drones.getLength()} drones`);
+    speeds().forEach(s => near(s, 80 * 1.3, 'easy top speed'));
+  });
+
+  if (savedHighScore === null) win.localStorage.removeItem(KEY); else win.localStorage.setItem(KEY, savedHighScore);
+}
+
+run().catch(err => { failed++; lines.push(`FAIL setup: ${err.message}`); }).finally(() => {
+  lines.push('', failed ? `${failed} FAILED` : 'all passed');
+  document.getElementById('results').textContent = lines.join('\n');
+  document.title = `Coin Dash game flow: ${failed ? 'FAIL' : 'PASS'}`;
+});
+</script>
+</body>
+</html>
