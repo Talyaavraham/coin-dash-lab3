@@ -5,6 +5,37 @@ Setup test: Talya's laptop is connected.
 Collect coins, avoid drones, and survive a 45-second round. Move with arrow keys or WASD;
 press P to pause or resume and R to restart. This is deliberately small so you can add features during the lab.
 
+## Controls
+
+| Key | Action |
+|---|---|
+| Arrow keys / WASD | Move |
+| P | Pause or resume |
+| R | Restart the round (also works while paused or on the end screen) |
+
+## Power-ups
+
+A power-up appears every few seconds at a free spot in the arena, away from you, the coin and the
+drones. Run over it to take it. If you leave it, it blinks and fades after a while. Only one is on the
+field at a time.
+
+| Power-up | Looks like | Effect |
+|---|---|---|
+| Shield | blue circle marked **S** | Absorbs one drone hit. A blue ring surrounds you while it lasts; when it breaks you blink and are safe for a moment to get clear. |
+| Speed Boost | green triangle marked **>>** | Move 60% faster for 6 seconds. You get a green outline. |
+| Double Coins | purple star marked **x2** | Each coin is worth 2 for 8 seconds. The coin gets a purple outline and shows +2 when taken. |
+
+Active power-ups are listed at the top right with the seconds left; a badge blinks during its last
+two seconds. Taking a power-up that is already active resets its time rather than stacking.
+Durations freeze while the game is paused and stop when the round ends; restarting clears them all.
+Doubled coins count towards the high score. Timings live in `settings.js` under `powerUps`.
+
+## Tests
+
+Serve the folder (see below) and open `/tests/` in a browser, for example
+`http://localhost:8000/tests/`. The page runs the real game with short timings and lists each check
+as PASS or FAIL. It puts your saved high score back when it finishes.
+
 **Play it here:** https://www.avivz.net/coin-dash/
 
 ## Run it locally
@@ -38,8 +69,9 @@ laptops' JSON files together and save the combined HTML. Use the same time windo
 - `.gitignore`: keeps generated reports out of Git.
 - `index.html`: page and script loading.
 - `style.css`: page appearance.
-- `settings.js`: round duration, speeds, colours and dimensions.
-- `game.js`: scene, input, collisions, score and end-of-round behaviour.
+- `settings.js`: round duration, speeds, power-up timings, colours and dimensions.
+- `game.js`: scene, input, collisions, score, power-ups and end-of-round behaviour.
+- `tests/`: in-browser tests for the power-ups (`index.html` runs `powerups.test.js`).
 - `vendor/phaser-3.90.0.min.js`: the pinned Phaser runtime, byte for byte the file published at
   `https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js`; `vendor/LICENSE.phaser.txt` is its MIT licence.
 
