@@ -27,11 +27,16 @@ main { max-width: 850px; margin: 20px auto; padding: 0 16px; }
 <script src="../settings.js"></script>
 <script>
   // Short, deterministic settings: no drones unless a test adds one, and a round that never times out.
-  Object.assign(COIN_DASH, { roundSeconds: 600, droneCount: 0 });
+  // Drone counts live in the difficulty presets, so every preset starts and stays empty.
+  Object.assign(COIN_DASH, { roundSeconds: 600 });
+  for (const preset of Object.values(COIN_DASH.difficulties)) {
+    Object.assign(preset, { droneCount: 0, extraDroneLevels: [] });
+  }
   Object.assign(COIN_DASH.powerUps, {
     spawnEverySeconds: 1, lifetimeSeconds: 2, speedSeconds: 1.5, doubleSeconds: 1.5, graceSeconds: 0.5
   });
 </script>
+<script src="../difficulty.js"></script>
 <script src="../game.js"></script>
 <script src="powerups.test.js"></script>
 </body>

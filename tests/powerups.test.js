@@ -247,6 +247,9 @@ test('a crowded arena delays the spawn instead of placing a power-up badly', asy
 (async () => {
   const lines = [];
   let passed = 0;
+  // The game opens on the difficulty menu; start a Normal round from it.
+  await until(() => window.coinDashGame && window.coinDashGame.scene.isActive('DifficultySelect'), 'the menu', 10000);
+  window.coinDashGame.scene.getScene('DifficultySelect').begin(1);
   await until(() => scene() && scene().effects, 'the game to start', 10000);
   for (const t of tests) {
     try {

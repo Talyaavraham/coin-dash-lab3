@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Coin Dash difficulty rules: running</title></head>
+<body>
+<h1>Difficulty rules</h1>
+<pre id="results"></pre>
+<script src="../settings.js"></script>
+<script src="../difficulty.js"></script>
+<script>
+// Unit tests for difficulty.js. Open this page in a browser; the title ends in PASS or FAIL.
+const rules = COIN_DASH_DIFFICULTY, lines = [];
+let failed = 0;
+function test(name, fn) {
+  try { fn(); lines.push(`ok   ${name}`); } catch (err) { failed++; lines.push(`FAIL ${name}: ${err.message}`); }
+}
+function equal(actual, expected, what) {
+  if (actual !== expected) throw new Error(`${what}: expected ${expected}, got ${actual}`);
+}
+function check(ok, what) { if (!ok) throw new Error(what); }
+
+for (const key of rules.order) {
+  const p = COIN_DASH.difficulties[key];
+  test(`${key}: starts at level 1`, () => equal(rules.levelFor(p, 0, 0), 1, 'level'));
+  test(`${key}: time boundary`, () => {
+    equal(rules.levelFor(p, p.levelSeconds * 1000 - 1, 0), 1, 'just before');
+    equal(rules.levelFor(p, p.levelSeconds * 1000, 0), 2, 'exactly at');
+  });
+  test(`${key}: coin boundary`, () => {
+    equal(rules.levelFor(p, 0, p.levelCoins - 1), 1, 'one coin short');
+    equal(rules.levelFor(p, 0, p.levelCoins), 2, 'exactly enough');
+  });
+  test(`${key}: time and coins take the further one, not the sum`, () =>
+    equal(rules.levelFor(p, p.levelSeconds * 1000, p.levelCoins), 2, 'level'));
+  test(`${key}: capped at maxLevel`, () => equal(rules.levelFor(p, 1e9, 1e6), p.maxLevel, 'level'));
+  test(`${key}: negative input stays at level 1`, () => equal(rules.levelFor(p, -5000, -3), 1, 'level'));
+  test(`${key}: never decreases as time and coins grow`, () => {
+    let last = 1;
+    for (let t = 0, coins = 0; t <= COIN_DASH.roundSeconds * 1000; t += 250, coins += t % 2000 === 0 ? 1 : 0) {
+      const level = rules.levelFor(p, t, coins);
+      check(level >= last, `dropped from ${last} to ${level} at ${t} ms`);
+      last = level;
+    }
+  });
+  test(`${key}: speed grows with level`, () => {
+    for (let l = 2; l <= p.maxLevel; l++) check(rules.droneSpeed(p, l) > rules.droneSpeed(p, l - 1), `level ${l}`);
+    equal(rules.droneSpeed(p, 1), p.droneSpeed, 'level 1 speed');
+  });
+  test(`${key}: drones stay slower than the player at max level (fair)`, () =>
+    check(rules.droneSpeed(p, p.maxLevel) < COIN_DASH.playerSpeed,
+      `${rules.droneSpeed(p, p.maxLevel)} >= ${COIN_DASH.playerSpeed}`));
+  test(`${key}: drone count only grows, by extraDroneLevels`, () => {
+    equal(rules.droneCount(p, 1), p.droneCount, 'level 1 count');
+    equal(rules.droneCount(p, p.maxLevel), p.droneCount + p.extraDroneLevels.length, 'max count');
+    check(p.droneCount + p.extraDroneLevels.length <= 5, 'at most 5 drones');
+  });
+}
+test('easy < normal < hard in drone count and speed', () => {
+  const [e, n, h] = rules.order.map(k => COIN_DASH.difficulties[k]);
+  check(e.droneCount < n.droneCount && n.droneCount < h.droneCount, 'counts');
+  check(e.droneSpeed < n.droneSpeed && n.droneSpeed < h.droneSpeed, 'speeds');
+  check(e.levelSeconds > n.levelSeconds && n.levelSeconds > h.levelSeconds, 'pace');
+});
+test('normal matches the original game at level 1', () => {
+  const n = COIN_DASH.difficulties.normal;
+  equal(n.droneCount, 3, 'drones'); equal(n.droneSpeed, 105, 'speed');
+});
+test('unknown or missing difficulty falls back to the default', () => {
+  equal(rules.preset('nightmare'), COIN_DASH.difficulties[COIN_DASH.defaultDifficulty], 'unknown');
+  equal(rules.preset(undefined), COIN_DASH.difficulties[COIN_DASH.defaultDifficulty], 'missing');
+  equal(rules.preset('toString'), COIN_DASH.difficulties[COIN_DASH.defaultDifficulty], 'prototype key');
+});
+
+lines.push('', failed ? `${failed} FAILED` : `all ${lines.length} passed`);
+document.getElementById('results').textContent = lines.join('\n');
+document.title = `Coin Dash difficulty rules: ${failed ? 'FAIL' : 'PASS'}`;
+</script>
+</body>
+</html>

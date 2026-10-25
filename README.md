@@ -2,16 +2,41 @@
 
 Setup test: Talya's laptop is connected.
 
-Collect coins, avoid drones, and survive a 45-second round. Move with arrow keys or WASD;
-press P to pause or resume and R to restart. This is deliberately small so you can add features during the lab.
+Collect coins, avoid drones, and survive a 45-second round. Pick a difficulty, then move with
+arrow keys or WASD; press P to pause or resume, R to restart, and M to change difficulty.
+This is deliberately small so you can add features during the lab.
+
+## Difficulty and progression
+
+The game opens on a difficulty menu: choose with Up/Down (or W/S) and press Enter or Space,
+press 1, 2 or 3, or click an option.
+
+| Difficulty | Drones at start | Drone speed at start | Level up every | Top level | Extra drone |
+|------------|-----------------|----------------------|----------------|-----------|-------------|
+| Easy       | 2               | 80                   | 15 s or 8 coins | 4        | none        |
+| Normal     | 3               | 105                  | 12 s or 6 coins | 5        | at level 4  |
+| Hard       | 4               | 125                  | 10 s or 5 coins | 6        | at level 4  |
+
+Normal starts exactly like the original game. Each round starts at level 1. The level rises with
+play time or coins, whichever is further along, and each level makes every drone faster
+(10%, 12% or 14% of the starting speed per level). A level-up flashes the screen, briefly turns
+the drones white and shows LEVEL n; the HUD shows the difficulty and current level. Extra drones
+enter at the corner farthest from you, and drones never get as fast as you (240), so every
+difficulty stays escapable. The tuning lives in `settings.js`; the rules are in `difficulty.js`.
+
+Pausing freezes the timer, the drones, the level-up animation and progression. R restarts
+the round on the same difficulty from level 1; M goes back to the menu. The high score is
+shared across difficulties.
 
 ## Controls
 
 | Key | Action |
 |---|---|
+| Up/Down or W/S, then Enter or Space; or 1/2/3; or click | Choose a difficulty on the menu |
 | Arrow keys / WASD | Move |
 | P | Pause or resume |
-| R | Restart the round (also works while paused or on the end screen) |
+| R | Restart the round on the same difficulty (also works while paused or on the end screen) |
+| M | Back to the difficulty menu |
 
 ## Power-ups
 
@@ -32,9 +57,14 @@ Doubled coins count towards the high score. Timings live in `settings.js` under 
 
 ## Tests
 
-Serve the folder (see below) and open `/tests/` in a browser, for example
-`http://localhost:8000/tests/`. The page runs the real game with short timings and lists each check
-as PASS or FAIL. It puts your saved high score back when it finishes.
+Serve the folder (see below) and open these pages; each one ends in PASS or FAIL and puts your
+saved high score back afterwards:
+
+- `tests/difficulty.test.html`: unit tests for the level, speed and drone-count rules.
+- `tests/game.test.html`: plays the real game with simulated keys (menu, progression, pause,
+  restart, round end, high score).
+- `tests/index.html`: power-up tests (`powerups.test.js`) on the real game with short timings:
+  spawning, each effect, pause, restart, game over and the high score.
 
 **Play it here:** https://www.avivz.net/coin-dash/
 
@@ -69,9 +99,11 @@ laptops' JSON files together and save the combined HTML. Use the same time windo
 - `.gitignore`: keeps generated reports out of Git.
 - `index.html`: page and script loading.
 - `style.css`: page appearance.
-- `settings.js`: round duration, speeds, power-up timings, colours and dimensions.
-- `game.js`: scene, input, collisions, score, power-ups and end-of-round behaviour.
-- `tests/`: in-browser tests for the power-ups (`index.html` runs `powerups.test.js`).
+- `settings.js`: round duration, speeds, power-up timings, colours, dimensions and difficulty presets.
+- `difficulty.js`: difficulty and progression rules (no Phaser, so tests can load it alone).
+- `game.js`: difficulty menu and game scene: input, collisions, score, power-ups, progression and
+  end-of-round behaviour.
+- `tests/`: browser test pages for difficulty, game flow and power-ups.
 - `vendor/phaser-3.90.0.min.js`: the pinned Phaser runtime, byte for byte the file published at
   `https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js`; `vendor/LICENSE.phaser.txt` is its MIT licence.
 
