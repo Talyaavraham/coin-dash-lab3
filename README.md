@@ -65,6 +65,8 @@ saved high score back afterwards:
   restart, round end, high score).
 - `tests/index.html`: power-up tests (`powerups.test.js`) on the real game with short timings:
   spawning, each effect, pause, restart, game over and the high score.
+- `tests/integration.test.html`: plays the real game with normal settings to check that power-ups,
+  difficulty, pause and the high score work together (level-ups, HUD layout, menu and restart).
 
 **Play it here:** https://www.avivz.net/coin-dash/
 
@@ -103,7 +105,7 @@ laptops' JSON files together and save the combined HTML. Use the same time windo
 - `difficulty.js`: difficulty and progression rules (no Phaser, so tests can load it alone).
 - `game.js`: difficulty menu and game scene: input, collisions, score, power-ups, progression and
   end-of-round behaviour.
-- `tests/`: browser test pages for difficulty, game flow and power-ups.
+- `tests/`: browser test pages for difficulty, game flow, power-ups and cross-feature integration.
 - `vendor/phaser-3.90.0.min.js`: the pinned Phaser runtime, byte for byte the file published at
   `https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js`; `vendor/LICENSE.phaser.txt` is its MIT licence.
 

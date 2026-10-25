@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coin Dash integration: running</title>
+<style>
+body { margin: 0; background: #0a1120; color: #e5edf7; font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 850px; margin: 20px auto; padding: 0 16px; }
+pre { white-space: pre-wrap; }
+</style>
+<script>
+  // Headless browsers may not fire animation frames; ?headless drives the game loop with timers instead.
+  if (new URLSearchParams(location.search).has('headless')) {
+    window.requestAnimationFrame = cb => setTimeout(() => cb(performance.now()), 16);
+    window.cancelAnimationFrame = id => clearTimeout(id);
+  }
+  window.pageErrors = [];
+  window.addEventListener('error', e => window.pageErrors.push(String(e.message)));
+</script>
+</head>
+<body>
+<main>
+  <h1>Cross-feature integration</h1>
+  <p>Plays the real game with its normal settings to check that power-ups, difficulty, pause and the
+  high score work together. Serve the repository folder over HTTP and open
+  <code>/tests/integration.test.html</code>; the title ends in PASS or FAIL. Your saved high score is
+  restored afterwards.</p>
+  <pre id="results">Running…</pre>
+  <div id="game"></div>
+</main>
+<script src="../vendor/phaser-3.90.0.min.js"></script>
+<script src="../settings.js"></script>
+<script src="../difficulty.js"></script>
+<script src="../game.js"></script>
+<script>
+/* global COIN_DASH, COIN_DASH_DIFFICULTY, HIGH_SCORE_KEY */
+const game = window.coinDashGame;
+const scene = () => game.scene.getScene('CoinDash');
+const menu = () => game.scene.getScene('DifficultySelect');
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const TYPES = ['shield', 'speed', 'double'];
+const KEYS = { P: 80, R: 82, M: 77, ONE: 49 };
+
+async function until(check, what, timeout = 5000) {
+  const start = performance.now();
+  while (!check()) {
+    if (performance.now() - start > timeout) throw new Error(`timed out waiting for ${what}`);
+    await wait(20);
+  }
+}
+function press(name) {
+  for (const type of ['keydown', 'keyup']) {
+    const event = new KeyboardEvent(type, { bubbles: true });
+    Object.defineProperty(event, 'keyCode', { get: () => KEYS[name] });
+    Object.defineProperty(event, 'which', { get: () => KEYS[name] });
+    window.dispatchEvent(event);
+  }
+}
+function assert(ok, message) { if (!ok) throw new Error(message); }
+// Turn off drone hits for the current round so a stray drone cannot end it mid-test.
+function noDroneHits() {
+  for (const collider of scene().physics.world.colliders.getActive()) {
+    if (collider.object2 === scene().drones) collider.active = false;
+  }
+}
+// Move the round's clock forward by whole levels of the current difficulty.
+function skipLevels(g, levels) { g.deadline -= levels * g.difficulty.levelSeconds * 1000 + 100; }
+
+const lines = [];
+let failed = 0;
+async function check(name, fn) {
+  try { await fn(); lines.push(`ok   ${name}`); } catch (err) { failed++; lines.push(`FAIL ${name}: ${err.message}`); }
+  document.getElementById('results').textContent = lines.join('\n');
+}
+
+async function run() {
+  localStorage.removeItem(HIGH_SCORE_KEY);
+  await until(() => game.isBooted && game.scene.isActive('DifficultySelect'), 'the menu', 10000);
+  menu().begin(COIN_DASH_DIFFICULTY.order.indexOf('hard'));
+  await until(() => game.scene.isActive('CoinDash') && scene().effects, 'a Hard round');
+  noDroneHits();
+  const g = scene();
+  g.nextSpawnAt = Infinity; // no random pickups; tests place what they need
+
+  await check('a Hard round starts with clean power-up state and the difficulty HUD', async () => {
+    assert(g.difficulty.label === 'Hard', `difficulty ${g.difficulty.label}`);
+    assert(g.drones.getLength() === COIN_DASH.difficulties.hard.droneCount, `${g.drones.getLength()} drones`);
+    await until(() => g.hud.text.includes('Hard · Level 1'), 'HUD difficulty and level');
+    assert(g.pickup === null && !g.effects.shield && g.effects.speed === 0 && g.effects.double === 0, 'power-up state');
+  });
+
+  await check('the HUD and all three power-up badges do not overlap with big numbers at the top level', async () => {
+    TYPES.forEach(t => g.activatePowerUp(t));
+    g.score = 120; g.highScore = 125; g.level = g.difficulty.maxLevel;
+    await wait(100);
+    const hudRight = g.hud.x + g.hud.width;
+    const badgesLeft = Math.min(...TYPES.map(t => g.powerHud[t].x - g.powerHud[t].width));
+    assert(hudRight + 8 <= badgesLeft, `HUD ends at ${hudRight.toFixed(0)}px, badges start at ${badgesLeft.toFixed(0)}px`);
+    // The widest difficulty label must fit too.
+    const widest = Math.max(...Object.values(COIN_DASH.difficulties).map(p => p.label.length));
+    const extra = (widest - g.difficulty.label.length) * (g.hud.width / g.hud.text.length);
+    assert(hudRight + extra + 8 <= badgesLeft, 'the widest difficulty label would overlap the badges');
+  });
+
+  await check('a level-up (faster drones, extra drone) leaves active power-ups intact', async () => {
+    g.level = 1; g.score = 0; g.highScore = 0;
+    TYPES.forEach(t => g.activatePowerUp(t));
+    const extraAt = g.difficulty.extraDroneLevels[0];
+    skipLevels(g, extraAt - 1);
+    await until(() => g.level >= extraAt, `level ${extraAt}`);
+    const expected = COIN_DASH_DIFFICULTY.droneCount(g.difficulty, g.level);
+    assert(g.drones.getLength() === expected, `${g.drones.getLength()} drones, expected ${expected}`);
+    assert(g.effects.shield && g.effects.speed > 0 && g.effects.double > 0, 'effects survived the level-up');
+    const fastestDrone = Math.max(...g.drones.getChildren().map(d => d.body.velocity.length()));
+    g.keys.D.isDown = true;
+    await wait(80);
+    const playerSpeed = g.player.body.velocity.length();
+    g.keys.D.isDown = false;
+    const boosted = COIN_DASH.playerSpeed * COIN_DASH.powerUps.speedMultiplier;
+    assert(Math.abs(playerSpeed - boosted) < 1, `boosted player speed ${playerSpeed}, expected ${boosted}`);
+    assert(playerSpeed > fastestDrone, 'the boosted player outruns the drones');
+  });
+
+  await check('pause during a level-up banner freezes the banner, power-ups, level and timer together', async () => {
+    TYPES.forEach(t => g.activatePowerUp(t));
+    const target = g.level + 1;
+    skipLevels(g, 1);
+    await until(() => g.level === target, `level ${target}`);
+    const banner = g.children.list.find(o => o.type === 'Text' && o.text === `LEVEL ${target}`);
+    assert(banner, 'level banner shown');
+    press('P');
+    await until(() => g.paused, 'pause');
+    const before = { y: banner.y, alpha: banner.alpha, speed: g.effects.speed, double: g.effects.double,
+      level: g.level, left: g.deadline - g.time.now };
+    g.score += 50; // would raise the level if progression ran while paused
+    await wait(1500);
+    assert(banner.y === before.y && banner.alpha === before.alpha, 'banner animated while paused');
+    assert(g.effects.speed === before.speed && g.effects.double === before.double, 'power-up timers ran while paused');
+    assert(g.level === before.level, 'level changed while paused');
+    g.score -= 50;
+    press('P');
+    await until(() => !g.paused, 'resume');
+    assert(Math.abs((g.deadline - g.time.now) - before.left) < 400, 'round timer lost time while paused');
+  });
+
+  await check('double coins feed the high score; the end screen sits above everything', async () => {
+    g.score = 0; g.highScore = 0; g.newRecord = false;
+    g.activatePowerUp('double');
+    g.player.setPosition(g.coin.x, g.coin.y);
+    g.player.body.reset(g.coin.x, g.coin.y);
+    await until(() => g.score === 2, 'a doubled coin');
+    assert(g.highScore === 2 && localStorage.getItem(HIGH_SCORE_KEY) === '2', 'high score saved as 2');
+    g.spawnPowerUp('speed', { x: 400, y: 250 });
+    g.finish('Time is up!');
+    const top = Math.max(...g.children.list.filter(o => o.visible && o !== g.pauseText).map(o => o.depth));
+    const end = g.children.list.filter(o => o.depth === top);
+    assert(end.length === 2, `${end.length} objects on the top layer`);
+    assert(end.some(o => o.text && o.text.includes('New high score!') && o.text.includes('M: change difficulty')),
+      'end text with the record and the M hint');
+  });
+
+  await check('M from the end screen, then Easy: power-ups reset, Best kept, power-ups spawn again', async () => {
+    press('M');
+    await until(() => game.scene.isActive('DifficultySelect'), 'the menu');
+    press('ONE');
+    await until(() => game.scene.isActive('CoinDash') && scene().difficulty.label === 'Easy' && scene().effects, 'an Easy round');
+    noDroneHits();
+    const e = scene();
+    assert(!e.effects.shield && e.effects.speed === 0 && e.effects.double === 0 && e.pickup === null, 'effects reset');
+    assert(TYPES.every(t => !e.powerHud[t].visible), 'badges hidden');
+    assert(e.highScore === 2, `Best ${e.highScore}`);
+    e.nextSpawnAt = e.playMs + 200;
+    await until(() => e.pickup, 'a power-up to spawn on Easy');
+  });
+
+  await check('R while paused with power-ups and a raised level gives a fresh, running level 1 round', async () => {
+    const e = scene();
+    ['shield', 'speed'].forEach(t => e.activatePowerUp(t));
+    skipLevels(e, 1);
+    await until(() => e.level >= 2, 'level 2');
+    press('P');
+    await until(() => e.paused, 'pause');
+    const oldPlayer = e.player;
+    press('R');
+    await until(() => scene().player !== oldPlayer && scene().effects, 'the restart');
+    await wait(100);
+    const r = scene();
+    assert(!r.paused && !r.physics.world.isPaused && !r.tweens.paused, 'round is running');
+    assert(r.level === 1 && r.difficulty.label === 'Easy', `level ${r.level}, ${r.difficulty.label}`);
+    assert(!r.effects.shield && r.effects.speed === 0, 'effects cleared');
+    assert(r.playMs > 0, 'play clock running');
+  });
+}
+
+const savedHighScore = localStorage.getItem(HIGH_SCORE_KEY);
+run().catch(err => { failed++; lines.push(`FAIL setup: ${err.message}`); }).finally(() => {
+  if (window.pageErrors.length) { failed++; lines.push(`FAIL page errors: ${window.pageErrors.join(' | ')}`); }
+  if (savedHighScore === null) localStorage.removeItem(HIGH_SCORE_KEY);
+  else localStorage.setItem(HIGH_SCORE_KEY, savedHighScore);
+  lines.push('', failed ? `${failed} FAILED` : 'all passed');
+  document.getElementById('results').textContent = lines.join('\n');
+  document.title = `Coin Dash integration: ${failed ? 'FAIL' : 'PASS'}`;
+});
+</script>
+</body>
+</html>
